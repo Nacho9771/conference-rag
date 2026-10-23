@@ -21,7 +21,7 @@ The notebook currently saves on request rather than autosaving. Switching notebo
 
 Use `node scripts/serve.mjs` for a local preview. It only serves an explicit list of frontend files. A generic file server rooted at the repository could expose local credentials.
 
-Install Python dependencies with `pip install -r requirements.lock.txt` in a virtual environment. Run scripts 02 through 05 in order. Step 04 caches paid embedding requests by stable sentence identity and content hash; reruns reuse matching results. Steps 03 and 05 upsert by `(talk_id, sentence_num)`.
+Install Python dependencies with `pip install -r requirements.lock.txt` in a virtual environment. Run scripts 02 through 05 in order. Step 04 caches paid embedding requests by stable sentence identity and content hash; reruns reuse matching results. Steps 03 and 05 upsert by `(talk_id, sentence_num)`. Step 05 skips already uploaded embeddings with matching sentence text and retries failed batches. Import configuration rejects public keys before sending write requests.
 
 `supabase/schema.sql` is the initial schema already applied to this project's hosted database as `conference_and_private_notebooks`. It is for a fresh database, not a reset script. Schema changes should be applied as additional reviewed migrations. Do not rerun the original course schema over this schema.
 
@@ -47,11 +47,13 @@ Both `USING` and `WITH CHECK` protect notebook updates. Owners cannot reassign n
 - HTTP checks: unauthenticated and invalid-token Edge Function calls return 401; anonymous notebooks access returns 401; local secret URL returns 404.
 - Supabase security advisor returned no findings after schema creation.
 
-Live sign-in, persisted notebook UI behavior, populated search, and AI generation must also be tested before calling the assignment complete. Being deployed alone does not establish that these flows work.
+Live verification completed: the owner signed in through an email link; keyword search returned talks; an example lesson notebook saved and reopened after reload; Markdown export downloaded; and the RAG view displayed an answer with numbered source links. A separate API integration test used disposable accounts to verify function health, 1,536-dimensional question embeddings, 20 semantic matches, an answer with citations, notebook owner CRUD, cross-user isolation, and anonymous corpus isolation. The disposable accounts were removed after the test.
+
+Talks are ranked by their strongest matching sentence. This avoids penalizing a relevant talk merely because it has several retrieved passages with different similarity scores. Relevance is never labeled as answer accuracy.
 
 ## Scope and future capacity
 
-This is a course-scale implementation. It is not load-tested for millions of users. Before a broad public launch, add durable per-user AI usage quotas, abuse controls, vector indexes selected from measured corpus/query behavior, ingestion monitoring, and realistic load/cost tests. An authenticated user can currently make repeated AI requests. Set provider budget alerts and use an appropriate API project.
+This is a course-scale implementation. It is not load-tested for millions of users. The corpus has 354 talks from 2022–2026 and 20,998 sentences. A cosine HNSW index (`supabase/search-index.sql`) was added after a live similarity query timed out during import. Approximate retrieval trades some nearest-neighbor recall for speed. Before a broad public launch, add durable per-user AI usage quotas, abuse controls, ingestion monitoring, and realistic load/cost tests. An authenticated user can currently make repeated AI requests. Set provider budget alerts and use an appropriate API project.
 
 ## Reflection preparation
 

@@ -451,7 +451,7 @@ async function keywordSearch() {
         for (const talk of Object.values(talks)) {
             html += `<div class="result-card">
                 <div class="result-title"><a href="${safeSourceUrl(talk.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">${escapeHtml(talk.title)}</a></div>
-                <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
+                <div class="result-speaker">${escapeHtml(talk.speaker)}</div>
                 <div class="result-sentences">${talk.sentences.slice(0, 3).join('<br>')}</div>
             </div>`;
         }
@@ -502,7 +502,7 @@ async function semanticSearch() {
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${safeSourceUrl(result.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">${escapeHtml(result.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(result.speaker)}</div>
+                        <div class="result-speaker">${escapeHtml(result.speaker)}</div>
                     </div>
                     ${badge}
                 </div>
@@ -549,8 +549,8 @@ async function askQuestion() {
         // Step 5: Generate answer with full context
         const answer = await generateAnswer(question, enrichedTalks);
 
-        // Compute overall similarity (weighted avg across source talks)
-        const overallSimilarity = topTalks.reduce((sum, t) => sum + t.avgSimilarity, 0) / topTalks.length;
+        // Relevance describes retrieval, not confidence in the generated answer.
+        const overallSimilarity = topTalks.reduce((sum, t) => sum + t.relevance, 0) / topTalks.length;
         const overallBadge = similarityBadge(overallSimilarity);
         const simClass = overallSimilarity >= 0.70 ? 'similarity-high'
             : overallSimilarity >= 0.40 ? 'similarity-mid' : 'similarity-low';
@@ -560,18 +560,18 @@ async function askQuestion() {
                 <div class="result-title">AI Answer</div>
                 ${overallBadge}
             </div>
-            <div class="result-sentences">${escapeHtml(answer)}</div>
+            <div class="result-sentences">${formatAnswer(answer)}</div>
         </div>`;
 
         // Show source talks with per-talk similarity badges and links
         html += '<div class="result-sources"><strong>Sources:</strong></div>';
         for (const [sourceIndex, talk] of topTalks.entries()) {
-            const talkBadge = similarityBadge(talk.avgSimilarity);
+            const talkBadge = similarityBadge(talk.relevance);
             html += `<div class="result-card result-source">
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${safeSourceUrl(talk.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">[${sourceIndex + 1}] ${escapeHtml(talk.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
+                        <div class="result-speaker">${escapeHtml(talk.speaker)}</div>
                     </div>
                     ${talkBadge}
                 </div>
@@ -616,7 +616,8 @@ async function searchSentences(embedding) {
     return data;
 }
 
-// Group search results by talk, computing average similarity per talk
+// Rank a talk by its strongest retrieved passage. Averaging penalizes talks
+// with several matches and can rank a weaker single-match talk above them.
 function groupByTalk(sentences) {
     const talkMap = {};
 
@@ -628,15 +629,15 @@ function groupByTalk(sentences) {
                 speaker: sent.speaker,
                 url: sent.url,
                 sentences: [],
-                totalSimilarity: 0
+                bestSimilarity: 0
             };
         }
         talkMap[sent.talk_id].sentences.push(sent.text);
-        talkMap[sent.talk_id].totalSimilarity += sent.similarity;
+        talkMap[sent.talk_id].bestSimilarity = Math.max(talkMap[sent.talk_id].bestSimilarity, sent.similarity);
     }
 
     return Object.values(talkMap)
-        .sort((a, b) => b.totalSimilarity / b.sentences.length - a.totalSimilarity / a.sentences.length)
+        .sort((a, b) => b.bestSimilarity - a.bestSimilarity)
         .slice(0, 3)
         .map(talk => ({
             talk_id: talk.talk_id,
@@ -644,11 +645,7 @@ function groupByTalk(sentences) {
             speaker: talk.speaker,
             url: talk.url,
             text: talk.sentences.join(' '),
-            // TODO: Is average similarity the right metric? Alternatives worth researching:
-            // - Max similarity (best single match per talk)
-            // - Average of top-3 sentences (reduces noise from weak matches)
-            // - Weighted by sentence count (rewards talks with more matches)
-            avgSimilarity: talk.totalSimilarity / talk.sentences.length
+            relevance: talk.bestSimilarity
         }));
 }
 
@@ -730,6 +727,11 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function formatAnswer(text) {
+    // Escape model text first; support bold emphasis without accepting HTML.
+    return escapeHtml(String(text)).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
 // Similarity badge with color coding

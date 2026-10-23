@@ -33,6 +33,7 @@ import uuid
 
 from supabase import create_client
 from tqdm import tqdm
+from _config import require_server_key
 
 
 INPUT_FILE = os.path.join('scripts', 'output', 'talks.json')
@@ -43,8 +44,9 @@ BATCH_SIZE = 100
 def load_config():
     with open('config.public.json', 'r') as f:
         public_config = json.load(f)
-    with open('config.secret.json', 'r') as f:
+    with open('config.secret.json', 'r', encoding='utf-8-sig') as f:
         secrets = json.load(f)
+    require_server_key(secrets.get('SUPABASE_SERVICE_KEY'))
     return public_config, secrets
 
 
@@ -130,7 +132,7 @@ def main():
     for i in tqdm(range(0, len(sentence_records), BATCH_SIZE), desc="Importing"):
         batch = sentence_records[i:i + BATCH_SIZE]
         try:
-            client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num').execute()
+            client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num', returning='minimal').execute()
             success += len(batch)
         except Exception as e:
             print(f"\nError at batch {i // BATCH_SIZE}: {e}")

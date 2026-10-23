@@ -27,6 +27,7 @@ import time
 
 from supabase import create_client
 from tqdm import tqdm
+from _config import require_server_key
 
 
 INPUT_FILE = os.path.join('scripts', 'output', 'sentences_with_embeddings.json')
@@ -36,8 +37,9 @@ BATCH_SIZE = 100
 def load_config():
     with open('config.public.json', 'r') as f:
         public_config = json.load(f)
-    with open('config.secret.json', 'r') as f:
+    with open('config.secret.json', 'r', encoding='utf-8-sig') as f:
         secrets = json.load(f)
+    require_server_key(secrets.get('SUPABASE_SERVICE_KEY'))
     return public_config, secrets
 
 
@@ -64,7 +66,18 @@ def main():
     public_config, secrets = load_config()
     client = create_client(public_config['SUPABASE_URL'], secrets['SUPABASE_SERVICE_KEY'])
 
-    print('Upserting embeddings without deleting the existing corpus.')
+    print('Checking existing embeddings before resuming the upload...')
+    existing = {}
+    offset = 0
+    while True:
+        page = client.table('sentence_embeddings').select('talk_id,sentence_num,text').not_.is_('embedding', 'null').order('talk_id').order('sentence_num').range(offset, offset + 999).execute().data
+        for row in page:
+            existing[(row['talk_id'], row['sentence_num'])] = row['text']
+        if len(page) < 1000:
+            break
+        offset += 1000
+    records = [r for r in records if existing.get((r['talk_id'], r['sentence_num'])) != r['text']]
+    print(f'{len(records)} records need upload; completed records will be preserved.')
 
     # Batch import (much faster than individual updates!)
     print(f"\n   Importing {len(records):,} records in batches of {BATCH_SIZE}...\n")
@@ -74,12 +87,17 @@ def main():
 
     for i in tqdm(range(0, len(records), BATCH_SIZE), desc="Importing"):
         batch = records[i:i + BATCH_SIZE]
-        try:
-            client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num').execute()
-            success += len(batch)
-        except Exception as e:
-            print(f"\nError at batch {i // BATCH_SIZE}: {e}")
-            errors += len(batch)
+        for attempt in range(3):
+            try:
+                client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num', returning='minimal').execute()
+                success += len(batch)
+                break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"\nBatch {i // BATCH_SIZE} failed: {type(e).__name__}, code {getattr(e, 'code', 'unknown')}")
+                    errors += len(batch)
+                else:
+                    time.sleep(2 ** attempt)
         time.sleep(0.1)
 
     print(f"\n✅ Import complete!")
@@ -94,7 +112,7 @@ def main():
 
     embedded_result = client.table('sentence_embeddings') \
         .select('id', count='exact') \
-        .not_('embedding', 'is', 'null') \
+        .not_.is_('embedding', 'null') \
         .limit(1).execute()
     with_emb = embedded_result.count or 0
 
