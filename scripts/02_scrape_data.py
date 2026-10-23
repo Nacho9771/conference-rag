@@ -19,6 +19,8 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,8 +28,8 @@ from tqdm import tqdm
 
 
 YEARS_TO_SCRAPE = 5
-START_YEAR = 2025 - YEARS_TO_SCRAPE
-END_YEAR = 2025
+END_YEAR = date.today().year
+START_YEAR = END_YEAR - YEARS_TO_SCRAPE + 1
 OUTPUT_DIR = os.path.join('scripts', 'output')
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'talks.json')
 
@@ -75,7 +77,9 @@ def get_talk_urls(conference_url, year, month, session):
         if not href or month_path not in href or 'lang=eng' not in href:
             continue
 
-        canonical = 'https://www.churchofjesuschrist.org' + href
+        canonical = urljoin('https://www.churchofjesuschrist.org', href)
+        if urlparse(canonical).hostname != 'www.churchofjesuschrist.org':
+            continue
         if canonical in seen:
             continue
         seen.add(canonical)
@@ -83,7 +87,7 @@ def get_talk_urls(conference_url, year, month, session):
         if any(slug in canonical.lower() for slug in session_slugs):
             continue
         # Skip the conference index page itself
-        if href.rstrip('?lang=eng').endswith(f'/{month}'):
+        if urlparse(canonical).path.rstrip('/').endswith(f'/{month}'):
             continue
 
         talk_urls.append(canonical)

@@ -37,7 +37,7 @@ function initializeSupabase() {
             // Listen for auth state changes
             supabaseClient.auth.onAuthStateChange((event, session) => {
                 if (event === 'SIGNED_IN' && session) {
-                    showApp(session.user);
+                    setTimeout(() => showApp(session.user), 0);
                 } else if (event === 'SIGNED_OUT') {
                     showLogin();
                 }
@@ -276,11 +276,14 @@ if (logoutBtn) {
 // ============================================
 
 function showLogin() {
+    window.dispatchEvent(new CustomEvent('study-auth', { detail: null }));
+    for (const type of ['keyword', 'semantic', 'rag']) showResults(type, '');
     if (loginScreen) loginScreen.classList.remove('hidden');
     if (appScreen) appScreen.classList.add('hidden');
 }
 
 function showApp(user) {
+    window.dispatchEvent(new CustomEvent('study-auth', { detail: user }));
     if (loginScreen) loginScreen.classList.add('hidden');
     if (appScreen) appScreen.classList.remove('hidden');
     if (userEmailSpan) userEmailSpan.textContent = user.email;
@@ -341,9 +344,9 @@ async function checkSearchReadiness() {
         if (hasEmbeddings) {
             try {
                 const { data, error: fnError } = await supabaseClient.functions.invoke('embed-question', {
-                    body: { question: 'test' }
+                    body: { action: 'health' }
                 });
-                semanticReady = !fnError;
+                semanticReady = !fnError && data?.ready === true;
             } catch {
                 // CORS or network error → function not deployed
             }
@@ -356,9 +359,9 @@ async function checkSearchReadiness() {
         } else {
             try {
                 const { data, error: fnError } = await supabaseClient.functions.invoke('generate-answer', {
-                    body: { question: 'test', context_talks: [] }
+                    body: { action: 'health' }
                 });
-                setSearchReady('rag', !fnError || fnError.context?.status !== 404);
+                setSearchReady('rag', !fnError && data?.ready === true);
             } catch {
                 setSearchReady('rag', false);
             }
@@ -381,10 +384,10 @@ function setSearchReady(type, ready) {
 
     if (statusEl) {
         if (ready) {
-            statusEl.textContent = '🟢 Ready';
+            statusEl.textContent = 'Ready';
             statusEl.className = 'status-badge ready';
         } else {
-            statusEl.textContent = '🔴 Not Ready';
+            statusEl.textContent = 'Awaiting setup';
             statusEl.className = 'status-badge not-ready';
         }
     }
@@ -419,7 +422,7 @@ async function keywordSearch() {
         const { data, error } = await supabaseClient
             .from('sentence_embeddings')
             .select('text, talk_id, title, speaker, url')
-            .ilike('text', `%${query}%`)
+            .ilike('text', `%${query.replace(/[\\%_]/g, '\\$&')}%`)
             .limit(20);
 
         if (error) throw new Error(`Search failed: ${error.message}`);
@@ -447,7 +450,7 @@ async function keywordSearch() {
         let html = '';
         for (const talk of Object.values(talks)) {
             html += `<div class="result-card">
-                <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
+                <div class="result-title"><a href="${safeSourceUrl(talk.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">${escapeHtml(talk.title)}</a></div>
                 <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
                 <div class="result-sentences">${talk.sentences.slice(0, 3).join('<br>')}</div>
             </div>`;
@@ -498,7 +501,7 @@ async function semanticSearch() {
             html += `<div class="result-card">
                 <div class="result-card-header">
                     <div>
-                        <div class="result-title"><a href="${escapeHtml(result.url)}" target="_blank" class="result-title-link">${escapeHtml(result.title)}</a></div>
+                        <div class="result-title"><a href="${safeSourceUrl(result.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">${escapeHtml(result.title)}</a></div>
                         <div class="result-speaker">by ${escapeHtml(result.speaker)}</div>
                     </div>
                     ${badge}
@@ -534,6 +537,10 @@ async function askQuestion() {
         const results = await searchSentences(embedding);
 
         // Step 3: Group by talk (with similarity scores and URLs)
+        if (!results?.length) {
+            showResults('rag', '<div class="no-results">No sources matched. Try a different question.</div>');
+            return;
+        }
         const topTalks = groupByTalk(results);
 
         // Step 4: Fetch full talk text for richer context
@@ -558,12 +565,12 @@ async function askQuestion() {
 
         // Show source talks with per-talk similarity badges and links
         html += '<div class="result-sources"><strong>Sources:</strong></div>';
-        for (const talk of topTalks) {
+        for (const [sourceIndex, talk] of topTalks.entries()) {
             const talkBadge = similarityBadge(talk.avgSimilarity);
             html += `<div class="result-card result-source">
                 <div class="result-card-header">
                     <div>
-                        <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
+                        <div class="result-title"><a href="${safeSourceUrl(talk.url)}" target="_blank" rel="noopener noreferrer" class="result-title-link">[${sourceIndex + 1}] ${escapeHtml(talk.title)}</a></div>
                         <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
                     </div>
                     ${talkBadge}
@@ -703,6 +710,15 @@ async function generateAnswer(question, contextTalks) {
 function showResults(type, html) {
     const el = document.getElementById(`${type}-results`);
     if (el) el.innerHTML = html;
+    window.dispatchEvent(new CustomEvent('study-results', { detail: type }));
+}
+
+function safeSourceUrl(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' && url.hostname === 'www.churchofjesuschrist.org'
+            ? escapeHtml(url.href) : '#';
+    } catch { return '#'; }
 }
 
 function clearResults(type) {
@@ -727,7 +743,7 @@ function similarityBadge(similarity) {
     } else {
         cls = 'similarity-low';
     }
-    return `<span class="similarity-badge ${cls}">${pct}%</span>`;
+    return `<span class="similarity-badge ${cls}" title="Vector similarity measures relevance, not answer accuracy">${pct}% relevance</span>`;
 }
 
 // ============================================
@@ -790,8 +806,7 @@ function recordPageView() {
     supabaseClient
         .from('page_views')
         .insert({
-            page_url: window.location.href,
-            user_agent: navigator.userAgent
+            page_url: '/'
         })
         .then(() => {
             // Query the total count

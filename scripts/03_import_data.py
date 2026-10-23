@@ -73,7 +73,7 @@ def main():
     print("Splitting talks into sentences...")
     sentence_records = []
     for talk in tqdm(talks, desc="Splitting"):
-        talk_id = str(uuid.uuid4())
+        talk_id = str(uuid.uuid5(uuid.NAMESPACE_URL, talk['url']))
         sentences = split_into_sentences(talk['text'])
         for i, sentence in enumerate(sentences, 1):
             sentence_records.append({
@@ -111,9 +111,7 @@ def main():
         result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
         existing_count = result.count or 0
         if existing_count > 0:
-            print(f"   Found {existing_count:,} existing rows. Truncating table...")
-            client.table('sentence_embeddings').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            print("   ✅ Table truncated.")
+            print(f"   Found {existing_count:,} existing rows. Upserting by stable talk/sentence IDs.")
         else:
             print("   Table is empty — ready for import.")
     except Exception as e:
@@ -132,7 +130,7 @@ def main():
     for i in tqdm(range(0, len(sentence_records), BATCH_SIZE), desc="Importing"):
         batch = sentence_records[i:i + BATCH_SIZE]
         try:
-            client.table('sentence_embeddings').insert(batch).execute()
+            client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num').execute()
             success += len(batch)
         except Exception as e:
             print(f"\nError at batch {i // BATCH_SIZE}: {e}")
@@ -143,6 +141,7 @@ def main():
     print(f"   Success: {success:,}")
     if errors:
         print(f"   Errors:  {errors:,}")
+        sys.exit(1)
 
     # Final verification
     result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()

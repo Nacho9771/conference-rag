@@ -64,23 +64,7 @@ def main():
     public_config, secrets = load_config()
     client = create_client(public_config['SUPABASE_URL'], secrets['SUPABASE_SERVICE_KEY'])
 
-    # Truncate existing data and re-import everything
-    print("\n" + "=" * 60)
-    print("Replacing database contents (truncate + re-import)")
-    print("=" * 60)
-
-    try:
-        result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
-        existing_count = result.count or 0
-        if existing_count > 0:
-            print(f"   Truncating {existing_count:,} existing rows...")
-            client.table('sentence_embeddings').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            print("   ✅ Table truncated.")
-        else:
-            print("   Table is empty — ready for import.")
-    except Exception as e:
-        print(f"   ⚠️ Could not check existing data: {e}")
-        print("   Proceeding with import anyway...")
+    print('Upserting embeddings without deleting the existing corpus.')
 
     # Batch import (much faster than individual updates!)
     print(f"\n   Importing {len(records):,} records in batches of {BATCH_SIZE}...\n")
@@ -91,7 +75,7 @@ def main():
     for i in tqdm(range(0, len(records), BATCH_SIZE), desc="Importing"):
         batch = records[i:i + BATCH_SIZE]
         try:
-            client.table('sentence_embeddings').insert(batch).execute()
+            client.table('sentence_embeddings').upsert(batch, on_conflict='talk_id,sentence_num').execute()
             success += len(batch)
         except Exception as e:
             print(f"\nError at batch {i // BATCH_SIZE}: {e}")
@@ -102,6 +86,7 @@ def main():
     print(f"   Success: {success:,}")
     if errors:
         print(f"   Errors:  {errors:,}")
+        sys.exit(1)
 
     # Verify
     result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
